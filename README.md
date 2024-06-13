@@ -2,6 +2,8 @@
 
 This is a minimal repo case for what we are calling the pink-eye bug. Over in the [Edge app](https://www.edge.app), our show / hide password icon (which looks like an eye) would randomly turn from mint green to pink.
 
+This is a standard `react-native init` project, but with App.tsx modified to show the bug. Yes, this has been [reported upstream](https://github.com/software-mansion/react-native-reanimated/issues/6119).
+
 # The Bug
 
 The bug exists in [react-native-reanimated](https://www.reanimated2.com/). Returning an `interpolateColor` value from a `useDerivedValue` will cause incorrect colors to appear on iOS. Here is the setup:
