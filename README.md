@@ -1,79 +1,69 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Pink-Eye Test
 
-# Getting Started
+This is a minimal repo case for what we are calling the pink-eye bug. Over in the [Edge app](https://www.edge.app), our show / hide password icon (which looks like an eye) would randomly turn from mint green to pink.
 
->**Note**: Make sure you have completed the [React Native - Environment Setup](https://reactnative.dev/docs/environment-setup) instructions till "Creating a new application" step, before proceeding.
+# The Bug
 
-## Step 1: Start the Metro Server
+The bug exists in [react-native-reanimated](https://www.reanimated2.com/). Returning an `interpolateColor` value from a `useDerivedValue` will cause incorrect colors to appear on iOS. Here is the setup:
 
-First, you will need to start **Metro**, the JavaScript _bundler_ that ships _with_ React Native.
-
-To start Metro, run the following command from the _root_ of your React Native project:
-
-```bash
-# using npm
-npm start
-
-# OR using Yarn
-yarn start
+```js
+const blue = '#2080c0';
+const derivedColor = useDerivedValue(() =>
+  interpolateColor(0, [0, 1], [blue, blue]),
+);
 ```
 
-## Step 2: Start your Application
+This *should* always render as blue if we put it in an animated style:
 
-Let Metro Bundler run in its _own_ terminal. Open a _new_ terminal from the _root_ of your React Native project. Run the following command to start your _Android_ or _iOS_ app:
-
-### For Android
-
-```bash
-# using npm
-npm run android
-
-# OR using Yarn
-yarn android
+```js
+const animatedStyle = useAnimatedStyle(() => ({
+  color: derivedColor.value,
+}));
 ```
 
-### For iOS
+However, on iOS specifically, the text will glitch to pink after the first button press:
 
-```bash
-# using npm
-npm run ios
+```js
+  // Cause a re-render on press:
+  const [count, setCount] = React.useState(0);
+  const handleCount = () => setCount(count + 1);
 
-# OR using Yarn
-yarn ios
+  return (
+    <>
+      <Animated.Text style={animatedStyle}>
+        {count}
+      </Animated.Text>
+      <Button onPress={handleCount} title="Count" />
+    </>
+  );
 ```
 
-If everything is set up _correctly_, you should see your new app running in your _Android Emulator_ or _iOS Simulator_ shortly provided you have set up your emulator/simulator correctly.
+# The Steps
 
-This is one way to run your app — you can also run it directly from within Android Studio and Xcode respectively.
+Here is what seems to be happening:
 
-## Step 3: Modifying your App
+1. First render
+    1. JS thread: `useDerivedValue` returns the string `"rgba(32, 128, 192, 1)"`
+    2. JS thread: `useAnimatedStyle` returns the style `{ color: "rgba(32, 128, 192, 1)" }`
+    3. The text renders as blue
+    4. UI thread: `useDerivedValue` runs again, and returns the *integer* 0xff2080c0. This seems to be some sort of optimization, since this differs from what the JS thread returns.
+2. User presses the button
+3. Second render
+    1. JS thread: `useDerivedValue` does *not* run, but returns the saved 0xff2080c0 from the UI thread.
+    2. JS thread: `useAnimatedStyle` returns the style `{ color: 0xff2080c0 }`
+    3. The text renders as pink
 
-Now that you have successfully run the app, let's modify it.
+Directly rendering `<Text style={{ color: 0xff2080c0 }}>Hello</Text>` produces the same pink color (although TypeScript complains). Messing around with the values, it seems that the JS thread interprets integers as 0xrrggbbaa, whereas the Reanimated UI thread interprets integers as 0xaarrggbb.
 
-1. Open `App.tsx` in your text editor of choice and edit some lines.
-2. For **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Developer Menu** (<kbd>Ctrl</kbd> + <kbd>M</kbd> (on Window and Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (on macOS)) to see your changes!
+# The Fix
 
-   For **iOS**: Hit <kbd>Cmd ⌘</kbd> + <kbd>R</kbd> in your iOS Simulator to reload the app and see your changes!
+As a hacky work-around until the Reanimated team fixes the bug, we are using [patch-package](https://www.npmjs.com/package/patch-package) to edit node_modules/react-native-reanimated/src/reanimated2/Colors.ts, around line 520:
 
-## Congratulations! :tada:
+```diff
+-  if (IS_WEB || !_WORKLET) {
++  if (!IS_ANDROID || !_WORKLET) {
+     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+   }
+```
 
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [Introduction to React Native](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you can't get this to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+This removes a performance optimization, but it does solve the bug.
